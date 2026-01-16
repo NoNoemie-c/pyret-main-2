@@ -25,7 +25,7 @@ and expr =
 | TELam of funbody
 and stmt = 
 | TSExpr of typd
-| TSDecl of var * typd
+| TSDecl of bool * var * typd
 | TSAssign of var * typd
 | TSFun of var * var list * funbody
 and funbody = param list * block
@@ -47,8 +47,8 @@ let rec pp_block fmt =
 and pp_var fmt = Format.fprintf fmt "%s"
 and pp_stmt fmt = function
 | TSExpr e -> pp_typd fmt e
-| TSDecl(i, e) -> 
-  Format.fprintf fmt "var %a = %a" pp_var i pp_typd e
+| TSDecl(b, i, e) -> 
+  Format.fprintf fmt "%s%a = %a" (if b then "var " else "") pp_var i pp_typd e
 | TSAssign(i, e) -> Format.fprintf fmt "%s := %a" i pp_typd e
 | TSFun (i, l, f) -> Format.fprintf fmt "%a<%a>%a" 
   pp_var i (pp_separated_list pp_var) l pp_funbody f

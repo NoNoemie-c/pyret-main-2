@@ -9,7 +9,7 @@ module V = struct
   let equal v1 v2 = v1.id = v2.id
   let create = let r = ref 0 in fun () -> incr r; { id = !r; def = None }
 end
-module Smap = Map.Make(String)
+module SMap = Map.Make(String)
 exception UnificationFailure of typ * typ
 let unification_error t1 t2 = raise (UnificationFailure (canon t1, canon t2))
 module Vset = Set.Make(V)
@@ -17,9 +17,9 @@ module Vmap = Map.Make(V)
   
 type schema = { vars: Vset.t; typ: typ }
 type env = { 
-  bindings: (schema * bool) Smap.t; 
+  bindings: (schema * bool) SMap.t; 
   fvars: Vset.t;
-  tvars: tvar Smap.t
+  tvars: tvar SMap.t
 }
 
 let rec ttyp_of_typ env t = match t.x with 
@@ -30,7 +30,7 @@ let rec ttyp_of_typ env t = match t.x with
 | TVar ("Boolean", []) -> TTBoolean
 | TVar ("List", [a]) -> TTList (ttyp_of_typ env a)
 | TArrow (l, r) -> TTArrow (List.map (ttyp_of_typ env) l, ttyp_of_typ env r)
-| TVar (v, []) -> begin try TTVar (Smap.find v env.tvars)
+| TVar (v, []) -> begin try TTVar (SMap.find v env.tvars)
   with Not_found -> raise (Error.Typer (_dp, _dp, fun () -> 
     Printf.eprintf "unknown type variable %s\n" v))
   end
@@ -54,7 +54,7 @@ let rec unify env force t u = match head t, head u with
 | TTVar x, TTVar y when x = y -> ()
 | TTVar v, z | z, TTVar v -> if occur v z 
   then unification_error (TTVar v) z
-  else if Smap.exists (fun _ x -> x = v) env.tvars then 
+  else if SMap.exists (fun _ x -> x = v) env.tvars then 
   raise (Error.Typer (_dp, _dp, fun () -> 
     Printf.eprintf "generalized variable cannot be unified\n"))
   else if force then v.def <- Some z
@@ -73,7 +73,7 @@ let rec unify_lt env force t u = match head t, head u with
   else if force then v.def <- Some z
 | TTVar v, z -> if occur v z 
   then unification_error (TTVar v) z
-  else if Smap.exists (fun _ x -> x = v) env.tvars then 
+  else if SMap.exists (fun _ x -> x = v) env.tvars then 
     raise (Error.Typer (_dp, _dp, fun () -> 
       Printf.eprintf "generalized variable cannot be unified\n"))
   else if force then 
@@ -107,14 +107,14 @@ let default =
       TTArrow ([TTArrow ([TTVar a; TTVar b], TTVar a); 
         TTVar a; TTList (TTVar b)], TTVar a)}
   ] in
-  { bindings=List.fold_left (fun m (k, v) -> Smap.add k (v, false) m) 
-    Smap.empty l; fvars=Vset.empty; tvars=Smap.empty }
+  { bindings=List.fold_left (fun m (k, v) -> SMap.add k (v, false) m) 
+    SMap.empty l; fvars=Vset.empty; tvars=SMap.empty }
 
 let norm_varset s =
   Vset.fold (fun v s -> Vset.union (fvars (TTVar v)) s) s Vset.empty
 
 let add gen x t b env =
-  if Smap.mem x env.bindings then 
+  if SMap.mem x env.bindings then 
     raise (Error.Typer (_dp, _dp, fun () -> 
       Printf.eprintf "var %s was already declared\n" x));
   let vt = fvars t in
@@ -125,10 +125,10 @@ let add gen x t b env =
     else
       { vars = Vset.empty; typ = t }, Vset.union env.fvars vt
   in
-  { bindings=Smap.add x (s, b) env.bindings; fvars=fvars; tvars=env.tvars }
+  { bindings=SMap.add x (s, b) env.bindings; fvars=fvars; tvars=env.tvars }
 
 let find s env =
-  let scheme = fst (Smap.find s env.bindings) in
+  let scheme = fst (SMap.find s env.bindings) in
   let m = Vset.fold (fun v vm -> Vmap.add v (V.create ()) vm) 
     scheme.vars Vmap.empty in
   let rec refresh = function
@@ -241,10 +241,10 @@ and wstmt env s = match s.x with
   | None -> ()
   | Some a -> unify_lt env true s.t (ttyp_of_typ env a)
   end;
-  TSDecl (x, s), add (not b) x s.t b env
+  TSDecl (b, x, s), add (not b) x s.t b env
 | SAssign (x, ex) ->
   begin try let ss = wexpr env ex in 
-    if snd (Smap.find x env.bindings) then begin
+    if snd (SMap.find x env.bindings) then begin
       unify_lt env true ss.t (find x env); TSAssign (x, ss), env
     end else begin raise (Error.Typer (s.sp, s.ep, fun () -> 
       Printf.eprintf "variable %s is read-only\n" x))
@@ -257,7 +257,7 @@ and wstmt env s = match s.x with
     if List.mem v ["Any"; "Nothing"; "Number"; "String"; "Boolean"; "List"] then
       (raise (Error.Typer (s.sp, s.ep, fun () -> 
         Printf.eprintf "name already taken %s\n" v)))
-    else Smap.add v (V.create ()) m) env.tvars tl in
+    else SMap.add v (V.create ()) m) env.tvars tl in
   let env' = { env with tvars = vars } in
   let tt = ttyp_of_typ env' t in
   let ppl = List.map (fun (p, pt) -> (p, ttyp_of_typ env' pt)) pl in

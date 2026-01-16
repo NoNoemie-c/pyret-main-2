@@ -4,3 +4,6 @@ pyretc.exe
 
 t.arr
 *.s
+t
+out
+a.out
