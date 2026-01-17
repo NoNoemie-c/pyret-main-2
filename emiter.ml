@@ -18,6 +18,7 @@ and expr =
 | AEVar of vartype * int
 | AECall of expr * expr list
 | AELam of clos * block
+| AECases of expr * expr * expr
 and stmt = 
 | ASExpr of expr
 | ASDeclC of expr
@@ -36,9 +37,9 @@ let rec alloc_expr (env: local_env) (fpcur: int) = function
     captured = env.captured} in
   let ab, fp = alloc_block nenv fpcur b in
   AEBlock ab, fp
-| TEOp (BAdd, ({ e=_; t=TTString } as e)::l) -> 
+| TEOp (BAdd, ({ e=_; t=TTString } as e)::a::l) -> 
   alloc_expr env fpcur (
-    TECall (TCVar "strconcat", [e; { e=TEOp (BAdd, l); t = TTString }]))
+    TECall (TCVar "strconcat", [e; { e=TEOp (BAdd, a::l); t = TTString }]))
 | TEOp (o, l) -> 
   let ll = List.map (fun e -> alloc_expr env fpcur e.e) l in
   AEOp (o, List.map fst ll), List.fold_left max fpcur (List.map snd ll)
@@ -57,7 +58,7 @@ let rec alloc_expr (env: local_env) (fpcur: int) = function
       (try AEVar (Clos, fst (Hashtbl.find env.captured x))
       with Not_found -> 
         let i = Hashtbl.length env.captured in
-        Hashtbl.add env.captured x (i, SMap.find x env.oldlocals);
+        Hashtbl.add env.captured x (9 + 8 * i, SMap.find x env.oldlocals);
         AEVar (Clos, 9 + 8 * i)))), fpcur
 | TELam (p, b) -> 
   let a, _ = List.fold_left (fun (m, i) (x, _) -> (SMap.add x (8*i + 16) m, i + 1)) (SMap.empty, 1) p in
@@ -78,6 +79,12 @@ let rec alloc_expr (env: local_env) (fpcur: int) = function
   let l = List.mapi (fun i e -> alloc_expr env (fpcur + i) e.e) l in
   let x, _ = alloc_expr env fpcur (TEVar v) in
   AECall (x, List.map fst l), List.fold_left max fpcur (List.map snd l)
+| TECases (e,  ["empty", [], eb; "link", [x; y], lb])
+| TECases (e,  ["link", [x; y], lb; "empty", [], eb]) -> 
+  let e, fp = alloc_expr env fpcur e.e in
+  let ef, fpe = alloc_expr env fp (TELam ([], eb)) in
+  let lf, fpl = alloc_expr env fpe (TELam ([x, TTAny; y, TTAny], lb)) in
+  AECases(e, ef, lf), fpl
 | _ -> failwith "TODO"
 and alloc_block env fpcur = function 
 | [] -> [], fpcur
@@ -106,9 +113,6 @@ and alloc_block env fpcur = function
     let e, fp = alloc_expr env fpcur e.e in
     let ss, fpss = alloc_block env fp ss in
     ASAssign (vartype, addr, e)::ss, fpss end
-(* and alloc_block env fpcur b = 
-  let ll = List.map (alloc_stmt env fpcur) b in
-  List.map fst ll, List.fold_left max fpcur (List.map snd ll) *)
 
 let codefun = ref nop 
 let rec compile_expr = function
@@ -139,13 +143,6 @@ let rec compile_expr = function
     movq (ind ~ofs:i rbp) !%rax ++
     readptr_rax () ++
     pushq !%rax
-  (*| AEVarg i ->
-    pushq (ind ~ofs:(16 + i * 8) rbp)
-  | AEVlocal i ->
-    pushq (ind ~ofs:(-i * 8) rbp)
-  | AEVclos i ->
-    movq (ind ~ofs:2 rbp) !%r14 ++
-    pushq (ind ~ofs:(16 + i * 8) r14)*)
 
   | AECall (f, l) ->
     List.fold_left (fun code e -> compile_expr e ++ code) nop l ++
@@ -165,7 +162,7 @@ let rec compile_expr = function
       cmpb (imm 6) !%r14b ++
       sete !%r12b ++
       testb !%r12b !%r13b ++ 
-      jne end_err ++
+      je end_err ++
       compile_expr (AEConst (CString ("can't compare functions"))) ++
       pushq (ilab "raise") ++
       call_star (ind rsp) ++
@@ -264,14 +261,16 @@ let rec compile_expr = function
       movb (imm 1) !%r14b ++
       label a ++
       mkbool !%r14b end in
-    List.fold_left (fun acc e ->
+    if List.length l = 1 then 
+      compile_expr (List.hd l)
+    else begin List.fold_left (fun acc e ->
       acc ++
       pushq !%rax ++
       opcode e) 
       (compile_expr (List.hd l) ++
         popq rax)
       (List.tl l) ++
-    pushq !%rax
+    pushq !%rax end
 
   | AEIf (l, eb) ->
     let endif = new_label () in
@@ -280,7 +279,8 @@ let rec compile_expr = function
       acc ++
       compile_expr c ++
       popq rax ++
-      testq (ind ~ofs:8 rax) (ind ~ofs:8 rax) ++
+      movb (ind ~ofs:1 rax) !%cl ++
+      testb (ind ~ofs:1 rax) !%cl ++
       je clab ++
       compile_block cb ++
       jmp endif ++
@@ -312,17 +312,26 @@ let rec compile_expr = function
     movq (ilab l) (ind ~ofs:1 rax) ++
     Hashtbl.fold (fun _ (i, ofs) acc ->
       acc ++
+      movetoheap ofs !%rcx ++
       movq (ind ~ofs:ofs rbp) !%rcx ++
-      movq !%rcx (ind ~ofs:(9 + i) rax))
+      movq !%rcx (ind ~ofs:i rax))
       clos.captured nop ++
     pushq !%rax
 
-  (* | _ -> failwith "todo compile expr"  *)
-
-  (*| Letin (ofs, e1, e2) ->
-      compile_expr e1 ++
-      popq rax ++ movq !%rax (ind ~ofs rbp) ++
-      compile_expr e2*)
+  | AECases (e, ef, lf) -> 
+    let l, lend = new_label (), new_label () in
+    compile_expr e ++
+    popq rax ++
+    cmpb (imm 4) (ind rax) ++
+    jne l ++
+    compile_expr (AECall (ef, [])) ++
+    jmp lend ++
+    label l ++
+    pushq (ind ~ofs:9 rax) ++
+    pushq (ind ~ofs:1 rax) ++
+    compile_expr (AECall (lf, [])) ++
+    popn 16 ++
+    label lend
 
 and compile_stmt = function
   | ASExpr e -> 
@@ -351,34 +360,6 @@ and compile_stmt = function
     movq (ind ~ofs:a rbp) !%rcx ++
     movq !%rax (ind ~ofs:1 rcx) ++
     pushq !%rcx
-  (* | Set (x, e, fpmax) ->
-    let code =
-      pushn fpmax ++
-      compile_expr e ++
-      popq rax ++ movq !%rax (lab x) ++
-      popn fpmax
-    in
-    codefun, codemain ++ code
-
-  | Fun (f, e, fpmax) ->
-    let code =
-      label f ++
-      pushq !%rbp ++
-      movq !%rsp !%rbp ++ pushn fpmax ++
-      compile_expr e ++ popq rax ++
-      popn fpmax ++ popq rbp ++ ret
-    in
-    codefun ++ code, codemain
-
-  | Print (e, fpmax) ->
-    let code =
-      pushn fpmax ++
-      compile_expr e ++
-      popq rdi ++
-      popn fpmax ++
-      call "print_number"
-    in
-    codefun, codemain ++ code *)
 and compile_block b =
   List.fold_left (fun acc s -> 
     acc ++ 

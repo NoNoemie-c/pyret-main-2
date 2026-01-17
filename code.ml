@@ -11,10 +11,12 @@ type local_env = {
 
 let loc = [
   "nothing", -8; 
-  "strconcat", -16; 
-  "_num_modulo", -24; 
-  "raise", -32;
-  "print", -40
+  "empty", -16;
+  "strconcat", -24; 
+  "_num_modulo", -32; 
+  "raise", -40;
+  "print", -48;
+  "link", -56
 ]
 let default_env = 
 { oldlocals = SMap.empty; 
@@ -31,11 +33,19 @@ let new_label =
 let popn n = addq (imm n) !%rsp
 let pushn n = subq (imm n) !%rsp
 
+let rec skip n l = 
+  if n <= 0 then l 
+  else skip (n - 1) (List.tl l)
 let alloc_default =
   pushq (imm 1) ++
   call "_malloc" ++
   popn 8 ++
   movb (imm 0) (ind rax) ++
+  pushq !%rax ++
+  pushq (imm 1) ++
+  call "_malloc" ++
+  popn 8 ++
+  movb (imm 4) (ind rax) ++
   pushq !%rax ++
   List.fold_left (fun acc n -> acc ++ 
     pushq (imm 9) ++
@@ -44,7 +54,7 @@ let alloc_default =
     movq (imm 6) (ind rax) ++
     movq (ilab n) (ind ~ofs:1 rax) ++
     pushq !%rax)
-    nop (List.tl (List.map fst loc))
+    nop (skip 2 (List.map fst loc))
 
 let readptr_rax () =
   let l = new_label () in
@@ -77,6 +87,14 @@ let mkfun r =
   popn 8 ++
   movb (imm 6) (ind rax) ++
   movq r (ind ~ofs:1 rax) 
+
+let movetoheap i d = 
+  movq !%rax !%r13  ++
+  movq (ind ~ofs:i rbp) !%r14 ++
+  mkptr !%r14 ++
+  movq !%rax (ind ~ofs:i rbp) ++
+  movq (ind ~ofs:1 rax) d ++
+  movq !%r13 !%rax
 
 let make codefun codemain =
 {
@@ -190,14 +208,48 @@ let make codefun codemain =
     popq rbp ++ 
     ret ++
 
+    label "link" ++
+    pushq !%rbp ++
+    movq !%rsp !%rbp ++
+    pushq (imm 17) ++
+    call "_malloc" ++
+    popn 8 ++
+    movb (imm 5) (ind rax) ++
+    movq (ind ~ofs:24 rbp) !%rcx ++
+    movq !%rcx (ind ~ofs:1 rax) ++
+    movq (ind ~ofs:32 rbp) !%rcx ++
+    movq !%rcx (ind ~ofs:9 rax) ++
+    popq rbp ++ 
+
     label "_num_modulo" ++
     pushq !%rbp ++
     movq !%rsp !%rbp ++
+    movq (imm 0) !%r12 ++
+    movq (imm 0) !%r13 ++
     movq (ind ~ofs:24 rbp) !%rax ++
     movq (ind ~ofs:32 rbp) !%rbx ++
+    movq (ind ~ofs:1 rax) !%rax ++
+    movq (ind ~ofs:1 rbx) !%rbx ++ 
+    cmpq (imm 0) !%rax ++
+    setl !%r12b ++ 
+    cmpq (imm 0) !%rbx ++
+    setl !%r13b ++ 
+    shlq (imm 8) !%r13 ++
+    addq !%r13 !%r12 ++
     cqto ++ 
     idivq !%rbx ++
     movq !%rdx !%r14 ++
+    cmpw (imm 1) !%r12w ++
+    je "t1" ++
+    cmpw (imm 256) !%r12w ++
+    je "t2" ++
+    jmp "tend" ++
+    label "t1" ++
+    addq !%rbx !%r14 ++
+    jmp "tend" ++
+    label "t2" ++
+    addq !%rbx !%r14 ++
+    label "tend" ++
     mkint !%r14 ++
     popq rbp ++ 
     ret ++
@@ -254,9 +306,7 @@ let make codefun codemain =
     pushq (ilab ".Sprint_string") ++
     call "_printf" ++
     movq (imm 1) !%rax ++
-    jmp "exit" ++
-
-    label "nothing";
+    jmp "exit";
   data =
     label ".Sprint_number" ++ string "%d" ++
     label ".Sprint_string" ++ string "%s" ++
@@ -267,3 +317,43 @@ let make codefun codemain =
     label ".Sprint_link" ++ string "link" ++
     label ".Sprint_function" ++ string "<function>"
 }
+
+(*
+fun _each<a, b>(f :: (a -> b), l :: List<a>) -> Nothing:
+  cases (List<a>) l block:
+    | empty => nothing
+    | link(x, ll) => 
+      f(x)
+      _each(f, ll)
+  end
+end
+
+fun _fold<a, b>(f :: (a, b -> a), x :: a, l :: List<b>) -> a:
+  cases (List<a>) l block:
+    | empty => x
+    | link(y, ll) => 
+      f(y, _fold(f, x, ll))
+      
+  end
+end
+
+fun print_list<a>(l :: List<a>) -> List<a> block:
+  fun aux(t :: List<a>) -> Nothing:
+    cases (List<a>) t block:
+      | empty => nothing
+      | link(x, tt) => 
+        print(x)
+        cases (List<a>) tt block:
+          | empty => nothing
+          | link(_, _) =>
+            print(", ")
+            aux(tt)
+        end
+    end
+  end
+  print("[list: ")
+  aux(l)
+  print("]")
+  l
+end
+*)

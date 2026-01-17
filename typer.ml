@@ -46,6 +46,10 @@ let rec occur v t =
   else occur v (head (TTVar wexpr)) 
 | _ -> false
 
+let new_var env =
+  let k, _ = SMap.max_binding env.bindings in
+  k ^ "f"
+
 let rec unify env force t u = match head t, head u with
 | TTAny, _ | _, TTAny -> ()
 | TTArrow (at, bt), TTArrow (au, bu) -> 
@@ -211,9 +215,9 @@ let rec wexpr env e = match e.x with
   let aa = ttyp_of_typ env a in
   let cc = wexpr env c in
   unify_lt env true cc.t (TTList aa);
-  let env' = (if x = "_" then (fun u -> u) else add false x aa false)
-    ((if y = "_" then (fun u -> u) else add false y (TTList aa) false) env) in
-  let (eeb, et), (llb, lt) = wblock env' eb, wblock env' lb in 
+  let env' = add false (if x = "_" then new_var env else x) aa false env in
+  let env'' = add false (if y = "_" then new_var env' else y) (TTList aa) false env' in
+  let (eeb, et), (llb, lt) = wblock env'' eb, wblock env'' lb in 
   unify env true et lt;
   { e=TECases (cc, ["empty", [], eeb; "link", [x; y], llb]); t=lt }
 | ELam (pl, t, b) ->
