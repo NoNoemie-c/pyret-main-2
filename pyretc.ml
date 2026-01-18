@@ -10,8 +10,9 @@ let compile p =
     if !parseonly then Ast.print_file ast
     else let tast = Typer.w ast in
       if !typeonly then Tast.print_file tast
-      else Emiter.code tast |> 
-        X86_64.print_in_file ~file: (Filename.chop_extension p ^ ".s")
+      else let s = Emiter.code tast in
+        X86_64.print_in_file ~file: (Filename.chop_extension p ^ ".s") s
+        (* cat *.txt >> all.txt *)
   with 
   | Error.Lexer f -> 
     let sp = Lexing.lexeme_start_p lb in
